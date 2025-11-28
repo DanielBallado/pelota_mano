@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>AR Physics Master - Multi-Hand, Ball Object</title>
+    <style>
+        body {
+            background-color: #1e1e1e;
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+        .container {
+            position: relative;
+            width: 1280px;
+            height: 720px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            border-radius: 12px;
+            overflow: hidden;
+            background: #000;
+        }
+        #input_video { display: none; }
+        #output_canvas {
+            position: absolute;
+            left: 0; top: 0;
+            width: 100%; height: 100%;
+            transform: scaleX(-1);
+        }
+        .loading {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 8px;
+            pointer-events: none;
+            text-align: center;
+        }
+    </style>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div class="container">
+        <div id="loadingMsg" class="loading">
+            <strong>Modo Pelota y Multi-Mano</strong><br>
+            Cargando...<br>
+            <small>¡Agarra, golpea y malabarea con tus dos manos!</small>
+        </div>
+        <video id="input_video"></video>
+        <canvas id="output_canvas" width="1280" height="720"></canvas>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const loadingMsg = document.getElementById('loadingMsg');
+
+        // --- PARÁMETROS DE FÍSICA ---
+        const GRAVITY = 0.0015;
+        const FRICTION = 0.99;
+        const BOUNCE = 0.6;
+        const HIT_FORCE = 0.15;
+
+        // --- OBJETO PELOTA ---
+        let ball = {
+            x: 0.5, y: 0.3,
+            vx: 0, vy: 0,
+            radius: 0.075, // Ahora es radio en lugar de size/2
+            color: '#FFD700', // Dorado
+            isDragging: false,
+            draggingHandId: null, // Para saber qué mano la está arrastrando
+            lastX: 0.5, lastY: 0.5 // Para calcular inercia al soltar
+        };
+
+        // --- ESTADOS DE MANO ---
+        // Almacenaremos la posición anterior del dedo para cada mano detectada
+        const handStates = {}; // { 0: {lastFingerX, lastFingerY}, 1: {lastFingerX, lastFingerY} }
+
+        function calculateDistance(x1, y1, x2, y2) {
+            return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+        }
+
+        function updatePhysics() {
+            if (!ball.isDragging) {
+                ball.vy += GRAVITY;
+                ball.vx *= FRICTION;
+                ball.vy *= FRICTION;
+                ball.x += ball.vx;
+                ball.y += ball.vy;
+
+                // Colisiones con paredes
+                const r = ball.radius;
+                if (ball.y + r > 1) { ball.y = 1 - r; ball.vy *= -BOUNCE; }
+                if (ball.y - r < 0) { ball.y = r; ball.vy *= -BOUNCE; }
+                if (ball.x + r > 1) { ball.x = 1 - r; ball.vx *= -BOUNCE; }
+                if (ball.x - r < 0) { ball.x = r; ball.vx *= -BOUNCE; }
+            }
+        }
+
+        function resolveFingerCollision(fingerX, fingerY, handId) {
+            const ballRadius = ball.radius;
+            const fingerRadius = 0.02; // El "hitbox" de la punta del dedo
+
+            const dist = calculateDistance(fingerX, fingerY, ball.x, ball.y);
+            const minDist = ballRadius + fingerRadius;
+
+            if (dist < minDist) {
+                const dx = ball.x - fingerX;
+                const dy = ball.y - fingerY;
+                const nx = dx / dist;
+                const ny = dy / dist;
+
+                // Empujar la pelota fuera del dedo
+                const overlap = minDist - dist;
+                ball.x += nx * overlap;
+                ball.y += ny * overlap;
+
+                // Transferencia de Energía (Golpe)
+                const lastState = handStates[handId];
+                if (lastState) {
+                    const fingerVx = fingerX - lastState.lastFingerX;
+                    const fingerVy = fingerY - lastState.lastFingerY;
+
+                    ball.vx += (fingerVx * 2) + (nx * 0.01);
+                    ball.vy += (fingerVy * 2) + (ny * 0.01);
+                }
+
+                ball.color = '#FF4500'; // Naranja al golpear
+                return true;
+            }
+            return false;
+        }
+
+        function onResults(results) {
+            loadingMsg.style.display = 'none';
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            let anyHandDragging = false;
+            const currentFingerPositions = {}; // Para guardar las posiciones actuales de los dedos
+
+            if (results.multiHandLandmarks) {
+                for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                    const landmarks = results.multiHandLandmarks[i];
+                    const handId = i; // Usamos el índice de la mano como su ID
+
+                    const indexTip = landmarks[8];
+                    const thumbTip = landmarks[4];
+
+                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00CC00', lineWidth: 2});
+                    drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 1});
+
+                    // Detectar Pinza
+                    const pinchDist = calculateDistance(indexTip.x, indexTip.y, thumbTip.x, thumbTip.y);
+                    const isPinching = pinchDist < 0.05;
+
+                    const cursorX = (indexTip.x + thumbTip.x) / 2;
+                    const cursorY = (indexTip.y + thumbTip.y) / 2;
+
+                    if (isPinching) {
+                        canvasCtx.beginPath();
+                        canvasCtx.moveTo(indexTip.x * canvasElement.width, indexTip.y * canvasElement.height);
+                        canvasCtx.lineTo(thumbTip.x * canvasElement.width, thumbTip.y * canvasElement.height);
+                        canvasCtx.strokeStyle = 'white';
+                        canvasCtx.lineWidth = 4;
+                        canvasCtx.stroke();
+                    }
+
+                    // --- LÓGICA DE INTERACCIÓN (POR MANO) ---
+                    const distToBall = calculateDistance(cursorX, cursorY, ball.x, ball.y);
+
+                    // 1. Modo ARRASTRAR (Pinza tiene prioridad)
+                    // Una mano está arrastrando O esta mano está haciendo pinza y está cerca de la pelota
+                    if (ball.isDragging && ball.draggingHandId === handId) {
+                        // Esta mano ya está arrastrando la pelota
+                        anyHandDragging = true;
+                        ball.color = '#00FFFF'; // Cian
+
+                        // Cálculo de inercia
+                        ball.vx = (cursorX - ball.lastX) * 1.5;
+                        ball.vy = (cursorY - ball.lastY) * 1.5;
+
+                        ball.x = cursorX;
+                        ball.y = cursorY;
+                        ball.lastX = cursorX;
+                        ball.lastY = cursorY;
+
+                    } else if (!ball.isDragging && isPinching && distToBall < ball.radius * 1.2) { // Un poco de margen
+                        // Ninguna mano está arrastrando, y esta mano hace pinza cerca de la pelota
+                        ball.isDragging = true;
+                        ball.draggingHandId = handId;
+                        anyHandDragging = true;
+                        ball.color = '#00FFFF'; // Cian
+
+                        ball.vx = 0; // Resetear velocidad al agarrar
+                        ball.vy = 0;
+
+                        ball.x = cursorX;
+                        ball.y = cursorY;
+                        ball.lastX = cursorX;
+                        ball.lastY = cursorY;
+                    }
+                    
+                    // 2. Modo GOLPEAR (Solo si NO estamos arrastrando la pelota con NINGUNA mano)
+                    if (!ball.isDragging) {
+                        const isColliding = resolveFingerCollision(indexTip.x, indexTip.y, handId);
+                        if (isColliding) {
+                            // La pelota ya cambia de color en resolveFingerCollision
+                        } else {
+                            // Si no hubo golpe y tampoco la estamos arrastrando
+                            ball.color = '#FFD700'; // Vuelve a dorado si no hay interacción
+                        }
+                    }
+
+                    // Guardar la posición actual del dedo índice para calcular la velocidad en el próximo frame
+                    currentFingerPositions[handId] = {
+                        lastFingerX: indexTip.x,
+                        lastFingerY: indexTip.y
+                    };
+                }
+            }
+            
+            // Actualizar estado de la pelota si ya no se arrastra
+            if (ball.isDragging && !anyHandDragging) {
+                ball.isDragging = false;
+                ball.draggingHandId = null;
+                ball.color = '#FFD700';
+            } else if (!ball.isDragging) {
+                 ball.color = '#FFD700'; // Asegurarse de que vuelve al color normal si no hay interacción
+            }
+
+            // Actualizar los estados de las manos
+            Object.assign(handStates, currentFingerPositions);
+            for (const handId in handStates) {
+                if (!results.multiHandLandmarks || !results.multiHandLandmarks[handId]) {
+                    delete handStates[handId]; // Eliminar manos que ya no están detectadas
+                }
+            }
+
+
+            updatePhysics(); // Aplicar física siempre
+
+            // --- RENDERIZADO DE LA PELOTA ---
+            const px = ball.x * canvasElement.width;
+            const py = ball.y * canvasElement.height;
+            const r = ball.radius * canvasElement.width;
+
+            canvasCtx.beginPath();
+            canvasCtx.arc(px, py, r, 0, 2 * Math.PI); // Dibujar círculo
+            canvasCtx.fillStyle = ball.color;
+            canvasCtx.fill();
+            canvasCtx.lineWidth = 3;
+            canvasCtx.strokeStyle = 'white';
+            canvasCtx.stroke();
+            canvasCtx.restore();
+        }
+
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({
+            maxNumHands: 2, // ¡Ahora detecta hasta 2 manos!
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
+        });
+        hands.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => { await hands.send({image: videoElement}); },
+            width: 1280,
+            height: 720
+        });
+        camera.start();
+    </script>
+</body>
+</html>
