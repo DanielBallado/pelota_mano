@@ -1,9 +1,19 @@
 <!DOCTYPE html>
 <html lang="es">
+
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
     <title>AR Physics Master - Multi-Hand, Ball Object</title>
     <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
         body {
             background-color: #1e1e1e;
             color: white;
@@ -12,54 +22,113 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            height: 100vh;
+            min-height: 100vh;
             margin: 0;
+            padding: 0;
             overflow: hidden;
+            position: fixed;
+            width: 100vw;
+            height: 100vh;
         }
+
         .container {
             position: relative;
-            width: 1280px;
-            height: 720px;
-            box-shadow: 0 0 20px rgba(0,0,0,0.5);
-            border-radius: 12px;
-            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
             background: #000;
+            overflow: hidden;
         }
-        #input_video { display: none; }
+
+        @media (min-width: 1024px) {
+            .container {
+                width: 100%;
+                max-width: 1280px;
+                max-height: 720px;
+                border-radius: 12px;
+                box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+            }
+        }
+
+        #input_video {
+            display: none;
+        }
+
         #output_canvas {
             position: absolute;
-            left: 0; top: 0;
-            width: 100%; height: 100%;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
             transform: scaleX(-1);
         }
+
         .loading {
             position: absolute;
-            top: 50%; left: 50%;
+            top: 50%;
+            left: 50%;
             transform: translate(-50%, -50%);
             z-index: 10;
-            background: rgba(0, 0, 0, 0.8);
+            background: rgba(0, 0, 0, 0.9);
             padding: 20px;
             border-radius: 8px;
             pointer-events: none;
             text-align: center;
+            max-width: 90%;
+        }
+
+        .loading strong {
+            font-size: clamp(16px, 4vw, 20px);
+            display: block;
+            margin-bottom: 8px;
+        }
+
+        .loading small {
+            font-size: clamp(12px, 3vw, 14px);
+            color: #ccc;
+        }
+
+        .info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 8px;
+            font-size: clamp(10px, 2.5vw, 12px);
+            z-index: 5;
+            max-width: 200px;
+        }
+
+        .info div {
+            margin: 3px 0;
         }
     </style>
-    
+
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"
+        crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 </head>
+
 <body>
 
     <div class="container">
         <div id="loadingMsg" class="loading">
-            <strong>Modo Pelota y Multi-Mano</strong><br>
-            Cargando...<br>
-            <small>¡Agarra, golpea y malabarea con tus dos manos!</small>
+            <strong>🎮 Modo Pelota Multi-Mano</strong>
+            <div>Cargando...</div>
+            <small>¡Agarra, golpea y malabarea!</small>
         </div>
+
+        <div class="info" id="info">
+            <div>🤏 Pinza: Agarrar</div>
+            <div>👆 Dedo: Golpear</div>
+            <div>✌️ 2 Manos: Malabarear</div>
+        </div>
+
         <video id="input_video"></video>
-        <canvas id="output_canvas" width="1280" height="720"></canvas>
+        <canvas id="output_canvas"></canvas>
     </div>
 
     <script>
@@ -67,27 +136,52 @@
         const canvasElement = document.getElementById('output_canvas');
         const canvasCtx = canvasElement.getContext('2d');
         const loadingMsg = document.getElementById('loadingMsg');
+        const infoDiv = document.getElementById('info');
 
-        // --- PARÁMETROS DE FÍSICA ---
-        const GRAVITY = 0.0015;
-        const FRICTION = 0.99;
-        const BOUNCE = 0.6;
+        // --- CONFIGURACIÓN RESPONSIVA MEJORADA ---
+        let canvasWidth = window.innerWidth;
+        let canvasHeight = window.innerHeight;
+
+        function updateCanvasSize() {
+            const container = document.querySelector('.container');
+            canvasWidth = container.clientWidth;
+            canvasHeight = container.clientHeight;
+
+            canvasElement.width = canvasWidth;
+            canvasElement.height = canvasHeight;
+
+            console.log('Canvas size:', canvasWidth, 'x', canvasHeight);
+        }
+
+        window.addEventListener('resize', updateCanvasSize);
+        window.addEventListener('orientationchange', () => {
+            setTimeout(updateCanvasSize, 200);
+        });
+
+        updateCanvasSize();
+
+        // --- PARÁMETROS DE FÍSICA MEJORADOS ---
+        const GRAVITY = 0.0008;  // Reducida para mejor control
+        const FRICTION = 0.98;
+        const BOUNCE = 0.65;     // Más rebote
         const HIT_FORCE = 0.15;
 
-        // --- OBJETO PELOTA ---
+        // --- OBJETO PELOTA CON MEJOR MANEJO DE BORDES ---
         let ball = {
-            x: 0.5, y: 0.3,
-            vx: 0, vy: 0,
-            radius: 0.075, // Ahora es radio en lugar de size/2
-            color: '#FFD700', // Dorado
+            x: 0.5,
+            y: 0.3,
+            vx: 0,
+            vy: 0,
+            radius: 0.06,  // Radio ligeramente menor para mejor control
+            color: '#FFD700',
             isDragging: false,
-            draggingHandId: null, // Para saber qué mano la está arrastrando
-            lastX: 0.5, lastY: 0.5 // Para calcular inercia al soltar
+            draggingHandId: null,
+            lastX: 0.5,
+            lastY: 0.3
         };
 
         // --- ESTADOS DE MANO ---
-        // Almacenaremos la posición anterior del dedo para cada mano detectada
-        const handStates = {}; // { 0: {lastFingerX, lastFingerY}, 1: {lastFingerX, lastFingerY} }
+        const handStates = {};
 
         function calculateDistance(x1, y1, x2, y2) {
             return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
@@ -101,41 +195,66 @@
                 ball.x += ball.vx;
                 ball.y += ball.vy;
 
-                // Colisiones con paredes
+                // COLISIONES MEJORADAS - La pelota se mantiene completamente visible
                 const r = ball.radius;
-                if (ball.y + r > 1) { ball.y = 1 - r; ball.vy *= -BOUNCE; }
-                if (ball.y - r < 0) { ball.y = r; ball.vy *= -BOUNCE; }
-                if (ball.x + r > 1) { ball.x = 1 - r; ball.vx *= -BOUNCE; }
-                if (ball.x - r < 0) { ball.x = r; ball.vx *= -BOUNCE; }
+
+                // Pared inferior
+                if (ball.y + r > 1) {
+                    ball.y = 1 - r;
+                    ball.vy *= -BOUNCE;
+                    if (Math.abs(ball.vy) < 0.001) ball.vy = 0; // Detener rebotes pequeños
+                }
+
+                // Pared superior
+                if (ball.y - r < 0) {
+                    ball.y = r;
+                    ball.vy *= -BOUNCE;
+                }
+
+                // Pared derecha
+                if (ball.x + r > 1) {
+                    ball.x = 1 - r;
+                    ball.vx *= -BOUNCE;
+                }
+
+                // Pared izquierda
+                if (ball.x - r < 0) {
+                    ball.x = r;
+                    ball.vx *= -BOUNCE;
+                }
+
+                // Asegurar que siempre esté dentro de los límites
+                ball.x = Math.max(r, Math.min(1 - r, ball.x));
+                ball.y = Math.max(r, Math.min(1 - r, ball.y));
             }
         }
 
         function resolveFingerCollision(fingerX, fingerY, handId) {
             const ballRadius = ball.radius;
-            const fingerRadius = 0.02; // El "hitbox" de la punta del dedo
+            const fingerRadius = 0.025;  // Área de colisión ligeramente mayor
 
             const dist = calculateDistance(fingerX, fingerY, ball.x, ball.y);
             const minDist = ballRadius + fingerRadius;
 
-            if (dist < minDist) {
+            if (dist < minDist && dist > 0) {
                 const dx = ball.x - fingerX;
                 const dy = ball.y - fingerY;
                 const nx = dx / dist;
                 const ny = dy / dist;
 
-                // Empujar la pelota fuera del dedo
+                // Empujar la pelota
                 const overlap = minDist - dist;
-                ball.x += nx * overlap;
-                ball.y += ny * overlap;
+                ball.x += nx * overlap * 1.5;
+                ball.y += ny * overlap * 1.5;
 
-                // Transferencia de Energía (Golpe)
+                // Transferencia de energía mejorada
                 const lastState = handStates[handId];
                 if (lastState) {
-                    const fingerVx = fingerX - lastState.lastFingerX;
-                    const fingerVy = fingerY - lastState.lastFingerY;
+                    const fingerVx = (fingerX - lastState.lastFingerX) * 3;
+                    const fingerVy = (fingerY - lastState.lastFingerY) * 3;
 
-                    ball.vx += (fingerVx * 2) + (nx * 0.01);
-                    ball.vy += (fingerVy * 2) + (ny * 0.01);
+                    ball.vx += fingerVx + (nx * 0.015);
+                    ball.vy += fingerVy + (ny * 0.015);
                 }
 
                 ball.color = '#FF4500'; // Naranja al golpear
@@ -144,69 +263,95 @@
             return false;
         }
 
+        let handsDetected = 0;
+        let frameCount = 0;
+
         function onResults(results) {
-            loadingMsg.style.display = 'none';
+            frameCount++;
+
+            // Ocultar loading después de los primeros frames
+            if (frameCount > 10 && loadingMsg.style.display !== 'none') {
+                loadingMsg.style.display = 'none';
+            }
+
             canvasCtx.save();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            // Dibujar la imagen de la cámara
+            if (results.image) {
+                canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+            }
 
             let anyHandDragging = false;
-            const currentFingerPositions = {}; // Para guardar las posiciones actuales de los dedos
+            const currentFingerPositions = {};
+            handsDetected = 0;
 
-            if (results.multiHandLandmarks) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                handsDetected = results.multiHandLandmarks.length;
+
                 for (let i = 0; i < results.multiHandLandmarks.length; i++) {
                     const landmarks = results.multiHandLandmarks[i];
-                    const handId = i; // Usamos el índice de la mano como su ID
+                    const handId = i;
 
                     const indexTip = landmarks[8];
                     const thumbTip = landmarks[4];
 
-                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00CC00', lineWidth: 2});
-                    drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 1});
+                    // Dibujar manos con mejor visibilidad
+                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {
+                        color: '#00FF00',
+                        lineWidth: 3
+                    });
+                    drawLandmarks(canvasCtx, landmarks, {
+                        color: '#FF3333',
+                        lineWidth: 2,
+                        radius: 4
+                    });
 
-                    // Detectar Pinza
                     const pinchDist = calculateDistance(indexTip.x, indexTip.y, thumbTip.x, thumbTip.y);
-                    const isPinching = pinchDist < 0.05;
+                    const isPinching = pinchDist < 0.08;  // Umbral más tolerante
 
                     const cursorX = (indexTip.x + thumbTip.x) / 2;
                     const cursorY = (indexTip.y + thumbTip.y) / 2;
 
+                    // Indicador visual de pinza
                     if (isPinching) {
                         canvasCtx.beginPath();
                         canvasCtx.moveTo(indexTip.x * canvasElement.width, indexTip.y * canvasElement.height);
                         canvasCtx.lineTo(thumbTip.x * canvasElement.width, thumbTip.y * canvasElement.height);
-                        canvasCtx.strokeStyle = 'white';
-                        canvasCtx.lineWidth = 4;
+                        canvasCtx.strokeStyle = '#FFFFFF';
+                        canvasCtx.lineWidth = 5;
                         canvasCtx.stroke();
                     }
 
-                    // --- LÓGICA DE INTERACCIÓN (POR MANO) ---
                     const distToBall = calculateDistance(cursorX, cursorY, ball.x, ball.y);
 
-                    // 1. Modo ARRASTRAR (Pinza tiene prioridad)
-                    // Una mano está arrastrando O esta mano está haciendo pinza y está cerca de la pelota
+                    // MODO ARRASTRAR
                     if (ball.isDragging && ball.draggingHandId === handId) {
-                        // Esta mano ya está arrastrando la pelota
                         anyHandDragging = true;
-                        ball.color = '#00FFFF'; // Cian
+                        ball.color = '#00FFFF';
 
-                        // Cálculo de inercia
-                        ball.vx = (cursorX - ball.lastX) * 1.5;
-                        ball.vy = (cursorY - ball.lastY) * 1.5;
+                        // Calcular inercia
+                        ball.vx = (cursorX - ball.lastX) * 2.0;
+                        ball.vy = (cursorY - ball.lastY) * 2.0;
 
                         ball.x = cursorX;
                         ball.y = cursorY;
                         ball.lastX = cursorX;
                         ball.lastY = cursorY;
 
-                    } else if (!ball.isDragging && isPinching && distToBall < ball.radius * 1.2) { // Un poco de margen
-                        // Ninguna mano está arrastrando, y esta mano hace pinza cerca de la pelota
+                        // Mantener dentro de límites mientras arrastra
+                        const r = ball.radius;
+                        ball.x = Math.max(r, Math.min(1 - r, ball.x));
+                        ball.y = Math.max(r, Math.min(1 - r, ball.y));
+
+                    } else if (!ball.isDragging && isPinching && distToBall < ball.radius * 1.5) {
+                        // Iniciar arrastre
                         ball.isDragging = true;
                         ball.draggingHandId = handId;
                         anyHandDragging = true;
-                        ball.color = '#00FFFF'; // Cian
+                        ball.color = '#00FFFF';
 
-                        ball.vx = 0; // Resetear velocidad al agarrar
+                        ball.vx = 0;
                         ball.vy = 0;
 
                         ball.x = cursorX;
@@ -214,76 +359,131 @@
                         ball.lastX = cursorX;
                         ball.lastY = cursorY;
                     }
-                    
-                    // 2. Modo GOLPEAR (Solo si NO estamos arrastrando la pelota con NINGUNA mano)
+
+                    // MODO GOLPEAR (solo si no está siendo arrastrada)
                     if (!ball.isDragging) {
                         const isColliding = resolveFingerCollision(indexTip.x, indexTip.y, handId);
-                        if (isColliding) {
-                            // La pelota ya cambia de color en resolveFingerCollision
-                        } else {
-                            // Si no hubo golpe y tampoco la estamos arrastrando
-                            ball.color = '#FFD700'; // Vuelve a dorado si no hay interacción
+                        if (!isColliding) {
+                            ball.color = '#FFD700';
                         }
                     }
 
-                    // Guardar la posición actual del dedo índice para calcular la velocidad en el próximo frame
+                    // Guardar posición para calcular velocidad
                     currentFingerPositions[handId] = {
                         lastFingerX: indexTip.x,
                         lastFingerY: indexTip.y
                     };
                 }
             }
-            
-            // Actualizar estado de la pelota si ya no se arrastra
+
+            // Actualizar estado de arrastre
             if (ball.isDragging && !anyHandDragging) {
                 ball.isDragging = false;
                 ball.draggingHandId = null;
                 ball.color = '#FFD700';
-            } else if (!ball.isDragging) {
-                 ball.color = '#FFD700'; // Asegurarse de que vuelve al color normal si no hay interacción
             }
 
-            // Actualizar los estados de las manos
+            // Actualizar estados de manos
             Object.assign(handStates, currentFingerPositions);
             for (const handId in handStates) {
                 if (!results.multiHandLandmarks || !results.multiHandLandmarks[handId]) {
-                    delete handStates[handId]; // Eliminar manos que ya no están detectadas
+                    delete handStates[handId];
                 }
             }
 
+            // Aplicar física
+            updatePhysics();
 
-            updatePhysics(); // Aplicar física siempre
-
-            // --- RENDERIZADO DE LA PELOTA ---
+            // --- RENDERIZADO DE LA PELOTA MEJORADO ---
             const px = ball.x * canvasElement.width;
             const py = ball.y * canvasElement.height;
-            const r = ball.radius * canvasElement.width;
+            const r = ball.radius * Math.min(canvasElement.width, canvasElement.height);
+
+            // Sombra para mejor visibilidad
+            canvasCtx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+            canvasCtx.shadowBlur = 15;
+            canvasCtx.shadowOffsetX = 3;
+            canvasCtx.shadowOffsetY = 3;
+
+            // Pelota con gradiente
+            const gradient = canvasCtx.createRadialGradient(px - r / 3, py - r / 3, r / 10, px, py, r);
+            gradient.addColorStop(0, ball.color);
+            gradient.addColorStop(1, ball.color === '#FFD700' ? '#FFA500' : ball.color);
 
             canvasCtx.beginPath();
-            canvasCtx.arc(px, py, r, 0, 2 * Math.PI); // Dibujar círculo
-            canvasCtx.fillStyle = ball.color;
+            canvasCtx.arc(px, py, r, 0, 2 * Math.PI);
+            canvasCtx.fillStyle = gradient;
             canvasCtx.fill();
+
+            // Borde blanco
+            canvasCtx.shadowColor = 'transparent';
             canvasCtx.lineWidth = 3;
             canvasCtx.strokeStyle = 'white';
             canvasCtx.stroke();
+
+            // Brillo
+            canvasCtx.beginPath();
+            canvasCtx.arc(px - r / 3, py - r / 3, r / 4, 0, 2 * Math.PI);
+            canvasCtx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+            canvasCtx.fill();
+
             canvasCtx.restore();
+
+            // Actualizar info
+            if (infoDiv && frameCount > 10) {
+                infoDiv.style.opacity = handsDetected > 0 ? '0.3' : '1';
+            }
         }
 
-        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-        hands.setOptions({
-            maxNumHands: 2, // ¡Ahora detecta hasta 2 manos!
-            modelComplexity: 1,
-            minDetectionConfidence: 0.7,
-            minTrackingConfidence: 0.7
+        // --- CONFIGURACIÓN DE MEDIAPIPE OPTIMIZADA ---
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
         });
+
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,    // Más sensible para mejor detección
+            minTrackingConfidence: 0.5      // Más sensible para mejor seguimiento
+        });
+
         hands.onResults(onResults);
 
+        // Configuración de cámara adaptativa
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        const getOptimalResolution = () => {
+            if (isMobile) {
+                return { width: 640, height: 480 };     // Móviles - mejor rendimiento
+            } else if (window.innerWidth <= 1024) {
+                return { width: 960, height: 720 };     // Tablets
+            } else {
+                return { width: 1280, height: 720 };    // Desktop
+            }
+        };
+
+        const resolution = getOptimalResolution();
+        console.log('Using resolution:', resolution, 'Mobile:', isMobile);
+
         const camera = new Camera(videoElement, {
-            onFrame: async () => { await hands.send({image: videoElement}); },
-            width: 1280,
-            height: 720
+            onFrame: async () => {
+                try {
+                    await hands.send({ image: videoElement });
+                } catch (e) {
+                    console.error('Error sending frame:', e);
+                }
+            },
+            width: resolution.width,
+            height: resolution.height,
+            facingMode: isMobile ? 'user' : undefined  // Cámara frontal en móviles
         });
-        camera.start();
+
+        camera.start().catch(err => {
+            console.error('Camera error:', err);
+            loadingMsg.innerHTML = '<strong>❌ Error de Cámara</strong><div>Por favor permite el acceso</div>';
+        });
+
+        console.log('App initialized. Device:', isMobile ? 'Mobile' : 'Desktop');
     </script>
 </body>
+
 </html>
